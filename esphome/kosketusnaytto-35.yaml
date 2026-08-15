@@ -1,0 +1,626 @@
+# ==================================================
+# ESP32 3.5" KOSKETUSNÄYTTÖ
+# Home Assistant -termostaatti
+# GitHub / YouTube: Sammaltekniikka
+# ==================================================
+# Huom: WiFi-tunnukset haetaan secrets.yaml-tiedostosta.
+# ==================================================
+
+esphome:
+  name: kosketusnaytto-35
+  friendly_name: Kosketusnäyttö 35
+
+esp32:
+  board: esp32dev
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: "Kosketusnaytto-Fallback"
+    password: "OMA_SALASANA_TAHAN"
+
+captive_portal:
+
+
+# ==================================================
+# KELLO
+# Home Assistantin kellonaika
+# ==================================================
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    
+
+# ==================================================
+# I2C
+# Näytön ja muiden I2C-laitteiden väylä
+# ==================================================
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+  id: i2c_bus
+
+
+# ==================================================
+# TCA9554
+# IO-laajennin näytön ohjauksia varten
+# ==================================================
+
+pca9554:
+  - id: tca9554
+    address: 0x20
+
+
+# ==================================================
+# LCD RESET
+# Näytön resetointi TCA9554:n kautta
+# ==================================================
+
+switch:
+  - platform: gpio
+    id: lcd_reset
+    internal: true
+    restore_mode: ALWAYS_ON
+    pin:
+      pca9554: tca9554
+      number: 0
+      mode:
+        output: true
+      inverted: false
+
+
+# ==================================================
+# SPI
+# Näytön tiedonsiirto
+# ==================================================
+
+spi:
+  id: lcd_spi
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  interface: hardware
+
+
+# ==================================================
+# TAUSTAVALO
+# Näytön kirkkauden säätö
+# ==================================================
+
+output:
+  - platform: ledc
+    pin: GPIO25
+    id: backlight_pwm
+
+light:
+  - platform: monochromatic
+    id: backlight
+    output: backlight_pwm
+    restore_mode: ALWAYS_ON
+
+
+# ==================================================
+# NÄYTTÖ
+# LCD-näytön asetukset
+# ==================================================
+
+display:
+  - platform: mipi_spi
+    model: ST7796
+    id: lcd
+    spi_id: lcd_spi
+
+    cs_pin: GPIO5
+    dc_pin: GPIO27
+
+    data_rate: 10MHz
+
+    rotation: 0
+    color_order: BGR
+    invert_colors: true
+
+    buffer_size: 12%
+
+    auto_clear_enabled: false
+    update_interval: never
+
+
+# ==================================================
+# FT6336 TOUCH
+# Kosketusnäytön asetukset
+# ==================================================
+
+touchscreen:
+  - platform: ft63x6
+    id: touch
+    display: lcd
+
+    reset_pin:
+      pca9554: tca9554
+      number: 1
+      mode:
+        output: true
+
+# ==================================================
+# GLOBALS
+# Näytön tilojen muistissa käytettävät muuttujat
+# ==================================================
+
+
+ 
+
+globals: 
+  - id: last_touch 
+    type: uint32_t 
+    restore_value: no 
+    initial_value: '0' 
+    
+  - id: heating_state
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  - id: night_mode
+    type: bool
+    restore_value: no
+    initial_value: "false"  
+    
+# ==================================================
+# WIFI STATUS
+# WiFi-yhteyden tila
+# ==================================================
+
+
+ 
+binary_sensor: 
+  - platform: status 
+    id: esp_status 
+
+    
+# ==================================================
+# HOME ASSISTANT SENSORS
+# Home Assistantista tulevat lämpötilat ja tavoitelämpötila
+# ==================================================
+
+sensor:
+  - platform: homeassistant
+    id: room_temp
+    entity_id: sensor.lampotila_paamakuuhuone
+
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: room_label
+            text:
+              format: "Huone %.1f °C"
+              args: [ x ]
+
+  - platform: homeassistant
+    id: outdoor_temp
+    entity_id: sensor.ulkolampotila_keskiarvo
+
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: outdoor_label
+            text:
+              format: "Ulkona %.1f °C"
+              args: [ x ]
+
+  - platform: homeassistant
+    id: setpoint_sensor
+    entity_id: climate.paamakuuhuone_termostaatti
+    attribute: temperature
+
+    on_value:
+      then:
+        - lvgl.arc.update:
+            id: temp_arc
+            value: !lambda return x;
+
+        - lvgl.label.update:
+            id: target_label
+            text:
+              format: "%.1f°C"
+              args: [ x ]
+# ==================================================
+# CLOCK + NIGHT DIMMING
+# Kellon päivitys ja yötilan ohjaus
+# ==================================================
+
+
+
+interval: 
+
+  - interval: 10s 
+    then: 
+      - lvgl.label.update: 
+          id: clock_label 
+          text: 
+            format: "%02d:%02d" 
+            args: 
+              - id(ha_time).now().hour 
+              - id(ha_time).now().minute 
+
+  - interval: 5s
+    then:
+  - interval: 5s
+    then:
+
+# ==========================================
+# YÖTILA / TAUSTAVALO
+# Yöllä näyttö himmennetään 25 prosenttiin
+# ==========================================
+
+      - lambda: |-
+          bool night =
+            id(ha_time).now().hour >= 21 ||
+            id(ha_time).now().hour < 6;
+
+          if (night &&
+              (millis() - id(last_touch) > 30000)) {
+
+            auto call = id(backlight).turn_on();
+            call.set_brightness(0.25);
+            call.perform();
+
+          } else if (!night) {
+
+            auto call = id(backlight).turn_on();
+            call.set_brightness(1.0);
+            call.perform();
+          }
+
+# ==========================================
+# TAUSTAN VÄRI
+# Päivällä vaalea ja yöllä tumma tausta
+# ==========================================
+
+      - lvgl.update:
+          bg_color: !lambda |-
+            if (id(ha_time).now().hour >= 21 ||
+                id(ha_time).now().hour < 6) {
+
+              return lv_color_hex(0x101418);
+
+            } else {
+
+              return lv_color_hex(0xF2F2F2);
+            }
+          bg_opa: COVER
+
+# ==========================================
+# KELLO
+# Kellon tekstin väri päivä- ja yötilassa
+# ==========================================
+
+      - lvgl.widget.update:
+          id: clock_label
+          text_color: !lambda |-
+            if (id(ha_time).now().hour >= 21 ||
+                id(ha_time).now().hour < 6) {
+
+              return lv_color_hex(0xFFFFFF);
+
+            } else {
+
+              return lv_color_hex(0x202020);
+            }
+
+# ==========================================
+# TAVOITELÄMPÖTILA
+# Tavoitelämpötilan tekstin väri
+# ==========================================
+
+      - lvgl.widget.update:
+          id: target_label
+          text_color: !lambda |-
+            if (id(ha_time).now().hour >= 21 ||
+                id(ha_time).now().hour < 6) {
+
+              return lv_color_hex(0xFFFFFF);
+
+            } else {
+
+              return lv_color_hex(0x202020);
+            }
+
+# ==========================================
+# HUONELÄMPÖTILA
+# Huonelämpötilan tekstin väri
+# ==========================================
+
+      - lvgl.widget.update:
+          id: room_label
+          text_color: !lambda |-
+            if (id(ha_time).now().hour >= 21 ||
+                id(ha_time).now().hour < 6) {
+
+              return lv_color_hex(0xFFFFFF);
+
+            } else {
+
+              return lv_color_hex(0x202020);
+            }
+
+# ==========================================
+# ULKOLÄMPÖTILA
+# Ulkolämpötilan tekstin väri
+# ==========================================
+
+      - lvgl.widget.update:
+          id: outdoor_label
+          text_color: !lambda |-
+            if (id(ha_time).now().hour >= 21 ||
+                id(ha_time).now().hour < 6) {
+
+              return lv_color_hex(0xFFFFFF);
+
+            } else {
+
+              return lv_color_hex(0x202020);
+            }
+
+# ==========================================
+# ODOTTAA / LÄMMITTÄÄ -TEKSTI
+# Lämmitystilan tekstin väri
+# ==========================================
+
+      - lvgl.widget.update:
+          id: status_text
+          text_color: !lambda |-
+            if (id(ha_time).now().hour >= 21 ||
+                id(ha_time).now().hour < 6) {
+
+              return lv_color_hex(0xFFFFFF);
+
+            } else {
+
+              return lv_color_hex(0x202020);
+            }
+  - interval: 2s
+    then:
+      - lambda: |-
+          if (isnan(id(room_temp).state) ||
+              isnan(id(setpoint_sensor).state)) {
+            return;
+          }
+
+          if (id(setpoint_sensor).state >
+              id(room_temp).state + 0.2) {
+
+            lv_label_set_text(
+              id(status_icon),
+              "\U000F0238"
+            );
+
+            lv_label_set_text(
+              id(status_text),
+              "Lämmittää"
+            );
+
+            lv_obj_set_style_text_color(
+              id(status_icon),
+              lv_color_hex(0xFF6B00),
+              LV_PART_MAIN
+            );
+
+          } else {
+
+            lv_label_set_text(
+              id(status_icon),
+              "\U000F0150"
+            );
+
+            lv_label_set_text(
+              id(status_text),
+              "Odottaa"
+            );
+
+            lv_obj_set_style_text_color(
+              id(status_icon),
+              lv_color_hex(0x2196F3),
+              LV_PART_MAIN
+            );
+          }
+# ==================================================
+# FONTS
+# Näytössä käytettävät fontit ja ikonit
+# ==================================================
+
+font:
+  - file: "gfonts://Roboto"
+    id: font20
+    size: 20
+    bpp: 4
+    glyphs:
+      - "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+      - "0123456789"
+      - "ÄäÖöÅå"
+      - "°"
+      - " "
+      - "."
+      - ":"
+      - "-"
+
+  - file: "gfonts://Roboto"
+    id: font32
+    size: 32
+    glyphs:
+      - "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+      - "ÄäÖöÅå"
+      - "0123456789"
+      - "°"
+      - " "
+      - "."
+      - ":"
+      - "-"
+
+  - file: "gfonts://Roboto"
+    id: font60
+    size: 60
+    glyphs:
+      - "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+      - "ÄäÖöÅå"
+      - "0123456789"
+      - "°"
+      - " "
+      - "."
+      - ":"
+      - "-"
+
+  - file: "gfonts://Roboto"
+    id: mdi24
+    size: 24
+
+    extras:
+      - file: "fonts/materialdesignicons-webfont.ttf"
+        glyphs:
+          - "\U000F05A9"  # WiFi
+          - "\U000F0238"  # lämmitys
+          - "\U000F0150"  # kello
+          - "\U000F0425"  # päällä
+ 
+  - file: "gfonts://Roboto"
+    id: status_font
+    size: 20
+    bpp: 4
+
+    glyphs:
+      - "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+      - "0123456789"
+      - "ÄäÖöÅå"
+      - " "
+      - "."
+      - ":"
+      - "-"
+
+    extras:
+      - file: "fonts/materialdesignicons-webfont.ttf"
+        glyphs:
+          - "\U000F0238"  # lämmitys
+          - "\U000F0150"  # odottaa      
+ 
+  - file: "gfonts://Roboto"
+    id: clock_font
+    size: 24
+    glyphs:
+      - "0123456789"
+      - ":"
+# ==================================================
+# LVGL
+# Näytön käyttöliittymä
+# ==================================================
+
+
+lvgl: 
+
+  color_depth: 16 
+
+  pages: 
+    - id: thermostat_page 
+      widgets: 
+
+        - label:
+            id: wifi_label
+            text: "\U000F05A9"
+            text_font: mdi24
+            text_color: 0x2196F3
+            x: 10
+            y: 10
+
+        - label: 
+            id: clock_label 
+            text: "--:--" 
+            text_font:  clock_font
+            x: 250 
+            y: 10 
+
+        - arc: 
+            id: temp_arc 
+
+            width: 260 
+            height: 260 
+            arc_width: 18 #säätöpyörän paksuuss
+
+            align: CENTER 
+            y: -30
+
+            min_value: 15 
+            max_value: 25 
+
+            value: 20 
+
+            adjustable: true 
+            indicator:
+              arc_width: 18
+              
+            on_change:
+              then:
+                - lvgl.label.update:
+                    id: target_label
+                    text:
+                      format: "%.1f°C"
+                      args: [ x ]
+
+                - homeassistant.action:
+                    action: climate.set_temperature
+                    data:
+                      entity_id: climate.paamakuuhuone_termostaatti
+                    data_template:
+                      temperature: "{{ target_temp }}"
+                    variables:
+                        target_temp: |-
+                          return x;
+
+        - label:
+            id: target_label
+            text: "20.0°C"
+            text_font: font60
+            align: CENTER
+            y: -45
+
+        - label: 
+            id: room_label 
+            text: "Huone --.-°C" 
+            text_font: font32
+            align: CENTER 
+            y: 115 
+
+        - label: 
+            id: outdoor_label 
+            text: "Ulkona --.-°C" 
+            text_font: font20
+            align: CENTER 
+            y: 150 
+
+        - label:
+            id: status_icon
+            text: "\U000F0150"
+            text_font: mdi24
+            align: bottom_mid
+            x: -55
+            y: -20
+
+        - label:
+            id: status_text
+            text: "Odottaa"
+            text_font: font20
+            align: bottom_mid
+            x: 10
+            y: -20
+ 
