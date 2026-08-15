@@ -3,6 +3,9 @@
 ESP32-pohjainen 3,5" kosketusnäyttö, jota käytetään Home Assistantin kanssa huonetermostaattina.
 
 Projektissa Waveshare ESP32-S3-Touch-LCD-3.5B -näyttö toimii kosketusohjaimena Home Assistantin termostaatille.
+## Valmis näyttö
+
+![ESP32 3.5" kosketusnäyttö](images/kosketusnaytto.jpg)
 
 ## Ominaisuudet
 
