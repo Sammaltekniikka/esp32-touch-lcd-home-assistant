@@ -54,7 +54,7 @@ Projektin rakentamisesta on tehty video YouTube-kanavalle **Sammaltekniikka**.
 
 Lisää videoon linkki tähän:
 
-[[YouTube-video](#)](https://youtu.be/PWWthvifjxM)
+https://youtu.be/PWWthvifjxM
 
 ---
 
